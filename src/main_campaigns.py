@@ -19,7 +19,7 @@ HEADERS = {
 
 # Lectura segura desde las variables de entorno del contenedor
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN")
-NOMBRE_BUCKET = "datawarehouseevents-demo-raw"
+NOMBRE_BUCKET = "your-raw-bucket-name"
 
 def name_path(source, tipo, id_elemento):
     return f"raw/{source}/{tipo}/{id_elemento}/{date.today()}/data.json"
@@ -58,7 +58,7 @@ def registrar_error(bq_client, proceso, entity_name, error, intentos=1,
                     child_id=None, child_name=None):
     """Registra errores estructurados en la tabla de control central V2."""
     query = """
-        INSERT INTO `datawarehouseevents-demo.pipeline_management.extraction_errors_v2`
+        INSERT INTO `your_gcp_project_id.pipeline_management.extraction_errors_v2`
         (proceso, platform, parent_id, parent_tipo, child_id, child_tipo, 
          entidad_id, entidad_tipo, fecha_ejecucion, tipo_error, mensaje_error, intentos, resuelto)
         VALUES 
@@ -299,7 +299,7 @@ def transformar_meta(raw_data, platform, account):
 
 def cargar_a_silver_campaigns(bq_client, campaings, entity_id):
     fecha     = date.today().strftime('%Y%m%d')
-    temp_base = f"datawarehouseevents-demo.silver_layer.temp_camp_{entity_id}_{fecha}"
+    temp_base = f"your_gcp_project_id.silver_layer.temp_camp_{entity_id}_{fecha}"
     
     try:
         _cargar_temporal(bq_client, campaings, f"{temp_base}_campaigns")
@@ -316,7 +316,7 @@ def _cargar_temporal(bq_client, datos, tabla):
 
 def _merge_campaigns(bq_client, temp_table):
     bq_client.query(f"""
-        MERGE `datawarehouseevents-demo.silver_layer.campaigns` AS target
+        MERGE `your_gcp_project_id.silver_layer.campaigns` AS target
         USING (
             SELECT
                 CAST(account_id            AS STRING)    AS account_id,
