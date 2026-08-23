@@ -1,32 +1,60 @@
-CREATE TABLE IF NOT EXISTS `your_gcp_project_id.gold_layer.dim_campaigns` (
-    campaign_id STRING NOT NULL OPTIONS(description="Llave primaria. ID único de la campaña en la plataforma publicitaria"),
-    account_name STRING OPTIONS(description="Nombre de la cuenta publicitaria (proveniente del Mapping Layer)"),
-    campaign_name STRING OPTIONS(description="Nombre real de la campaña extraído de la API (Meta/TikTok)"),
-    platform STRING OPTIONS(description="Plataforma de origen (Facebook, TikTok, etc.) proveniente de Monday"),
-    status STRING OPTIONS(description="Estado actual de la campaña (ACTIVE, PAUSED, etc.)"),
-    objective STRING OPTIONS(description="Objetivo publicitario (OUTCOME_SALES, TRAFFIC, etc.)"),
-    start_time TIMESTAMP OPTIONS(description="Fecha y hora de inicio de la campaña"),
-    stop_time TIMESTAMP OPTIONS(description="Fecha y hora de fin de la campaña (puede ser nulo si es continua)"),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP() OPTIONS(description="Fecha de primera inserción en la capa Gold"),
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP() OPTIONS(description="Fecha de última actualización")
-)
-CLUSTER BY platform, status; 
--- El cluster por plataforma y estado acelerará las consultas al filtrar en Looker Studio.
-
-CREATE TABLE IF NOT EXISTS `your_gcp_project_id.gold_layer.fact_campaign_performance` (
+-- DDL: Tabla de Hechos de Rendimiento Publicitario
+CREATE TABLE IF NOT EXISTS `your_project_id.gold_layer.fact_campaign_performance` (
     date_information DATE NOT NULL OPTIONS(description="Llave primaria de tiempo. Fecha diaria del insight publicitario"),
     campaign_id STRING NOT NULL OPTIONS(description="Llave foránea. Conecta con dim_campaigns"),
-    account_name STRING OPTIONS(description="Cuenta publicitaria de origen"),
+    account_id STRING OPTIONS(description="Cuenta publicitaria de origen"),
     impressions INT64 OPTIONS(description="Número de impresiones acumuladas en el día"),
     clicks INT64 OPTIONS(description="Número de clics acumulados en el día"),
-    spend FLOAT64 OPTIONS(description="Dinero invertido en el día (Moneda real)"),
-    purchases FLOAT64 OPTIONS(description="Cantidad de compras/boletos atribuidos en el día"),
-    value_purchases FLOAT64 OPTIONS(description="Valor monetario de las compras atribuidas en el día"),
-    platform STRING OPTIONS(description="Plataforma publicitaria (Facebook, TikTok, etc.)"),
-    row_hash STRING OPTIONS(description="Hash de control para detectar cambios retroactivos en las métricas"),
-    inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP() OPTIONS(description="Auditoría: Fecha de inserción en el Data Warehouse")
+    spend FLOAT64 OPTIONS(description="Dinero invertido en el día"),
+    purchases FLOAT64 OPTIONS(description="Cantidad de conversiones/compras atribuidas"),
+    value_purchases FLOAT64 OPTIONS(description="Valor monetario de las compras"),
+    platform STRING OPTIONS(description="Plataforma publicitaria (Meta, TikTok, etc.)"),
+    row_hash STRING OPTIONS(description="Hash de control para detectar cambios retroactivos"),
+    inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP() OPTIONS(description="Auditoría: Fecha de inserción")
 )
 PARTITION BY date_information
-CLUSTER BY  campaign_id;
--- Nota: Particionar por fecha asegura que Looker Studio solo pague por los días que el usuario está viendo en el filtro.
+CLUSTER BY platform, campaign_id;
+
+
+-- DML: MERGE para carga incremental e idempotente
+MERGE `your_project_id.gold_layer.fact_campaign_performance` AS target
+USING (
+  SELECT 
+    CAST(date_information AS DATE) AS date_information,
+    CAST(campaign_id AS STRING) AS campaign_id,
+    CAST(account_id AS STRING) AS account_id,
+    CAST(impressions AS INT64) AS impressions,
+    CAST(clicks AS INT64) AS clicks,
+    CAST(spend AS FLOAT64) AS spend,
+    CAST(purchases AS FLOAT64) AS purchases,
+    CAST(value_purchases AS FLOAT64) AS value_purchases,
+    CAST(platform AS STRING) AS platform,
+    CAST(row_hash AS STRING) AS row_hash
+  FROM `your_project_id.silver_layer.campaign_insights`
+) AS source
+ON target.campaign_id = source.campaign_id 
+AND target.date_information = source.date_information
+
+-- Si el día ya existe pero el Hash cambió (actualización retroactiva de Meta)
+WHEN MATCHED AND target.row_hash != source.row_hash THEN
+  UPDATE SET 
+    impressions = source.impressions,
+    clicks = source.clicks,
+    spend = source.spend,
+    purchases = source.purchases,
+    value_purchases = source.value_purchases,
+    row_hash = source.row_hash,
+    inserted_at = CURRENT_TIMESTAMP()
+
+-- Si es un registro nuevo para ese día y campaña
+WHEN NOT MATCHED THEN
+  INSERT (
+    date_information, campaign_id, account_id, impressions, clicks, 
+    spend, purchases, value_purchases, platform, row_hash, inserted_at
+  )
+  VALUES (
+    source.date_information, source.campaign_id, source.account_id, source.impressions, 
+    source.clicks, source.spend, source.purchases, source.value_purchases, 
+    source.platform, source.row_hash, CURRENT_TIMESTAMP()
+  );
 
